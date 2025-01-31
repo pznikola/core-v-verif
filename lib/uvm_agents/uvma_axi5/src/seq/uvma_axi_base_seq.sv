@@ -26,6 +26,7 @@ class uvma_axi_base_seq_c extends uvm_sequence#(uvma_axi_transaction_c);
    `uvm_object_utils(uvma_axi_base_seq_c)
    `uvm_declare_p_sequencer(uvma_axi_vsqr_c)
 
+
    /**
     * Default constructor.
     */
@@ -35,6 +36,7 @@ class uvma_axi_base_seq_c extends uvm_sequence#(uvma_axi_transaction_c);
     * Assigns cfg and cntxt handles from p_sequencer.
     */
    extern virtual task pre_start();
+ //  extern virtual task pre_body();
 
 endclass : uvma_axi_base_seq_c
 
@@ -44,7 +46,12 @@ function uvma_axi_base_seq_c::new(string name="uvma_axi_base_seq");
 
 endfunction : new
 
+
 task uvma_axi_base_seq_c::pre_start();
+
+   if(p_sequencer == null) begin
+         `uvm_fatal("SQR", "SQR handle is null")     
+   end
 
    cfg   = p_sequencer.cfg;
    cntxt = p_sequencer.cntxt;

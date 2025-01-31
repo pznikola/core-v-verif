@@ -24,9 +24,6 @@
 // 
 // ----------------------------------------------------------------------------
 
-// Timescale for this interface
-timeunit      1ns;
-timeprecision 100ps;
 
 interface bp_vif ( input bit clk,
                   input bit rstn );
@@ -189,6 +186,12 @@ import bp_vif_xrtl_pkg::*;
       end // if
    end // always
 
+   task force_bp_out(logic bp);
+     force bp_out = bp;
+   endtask
+   task release_bp_out();
+     release bp_out;
+   endtask
 endinterface: bp_vif
 
 

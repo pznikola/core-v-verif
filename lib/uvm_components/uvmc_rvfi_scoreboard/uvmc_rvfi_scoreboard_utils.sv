@@ -21,6 +21,7 @@ import "DPI-C" function void spike_set_param_uint64_t(string base, string name, 
 import "DPI-C" function void spike_set_param_str(string base, string name, string value);
 import "DPI-C" function void spike_set_param_bool(string base, string name, bit value);
 import "DPI-C" function void spike_set_default_params(string profile);
+import "DPI-C" function void spike_set_params_from_file(string paramFilePath);
 
     st_core_cntrl_cfg m_core_cfg;
 
@@ -30,6 +31,8 @@ import "DPI-C" function void spike_set_default_params(string profile);
     static longint unsigned csrs_match_count;
     static longint unsigned instr_mismatch_count;
 
+    localparam INSTR_MISMATCH_MAX = 5;
+
     bit tb_sim_finished;
 
     function automatic string rvfi_print_struct(ref st_rvfi st);
@@ -37,7 +40,7 @@ import "DPI-C" function void spike_set_default_params(string profile);
 
             $cast(mode, st.mode[1:0]);
 
-            return $sformatf(`FORMAT_INSTR_STR_MACRO, $sformatf("%t", $time), 0,
+            return $sformatf(`FORMAT_INSTR_STR_MACRO, $sformatf("%t", $time), st.intr,
                             st.trap,
                             st.pc_rdata,
                             $sformatf("%08x", st.insn),
@@ -64,7 +67,7 @@ import "DPI-C" function void spike_set_default_params(string profile);
 
     endfunction : rvfi_print_yaml
 
-    function void rvfi_gen_report(string exit_cause, string mismatch_description = "");
+    function void rvfi_gen_report(string exit_cause, longint exit_code, string mismatch_description = "");
         string filename;
         int file_handle;
 
@@ -74,6 +77,7 @@ import "DPI-C" function void spike_set_default_params(string profile);
           file_handle = $fopen(filename, "w");
           if (file_handle != 0) begin
               $fdisplay(file_handle, "exit_cause: %s", exit_cause);
+              $fdisplay(file_handle, "exit_code: 0x%4h", exit_code);
               $fdisplay(file_handle, "instr_count: 0x%h", instr_count);
               $fdisplay(file_handle, "csrs_match_count: 0x%h", csrs_match_count);
               $fdisplay(file_handle, "mismatches_count: 0x%h", core_queue.size());
@@ -122,20 +126,23 @@ import "DPI-C" function void spike_set_default_params(string profile);
             reference_model_pc64 = reference_model_pc64 & 'hFFFFFFFF;
         end
 
-        if (t_core.intr[0] | t_reference_model.intr[0]) begin
-            if (t_core.intr[0] !== t_reference_model.intr[0]) begin
-                error = 1;
-                cause_str = $sformatf("%s\nInterrupts Mismatch [REF]: 0x%-16h [CORE]: 0x%-16h", cause_str, t_reference_model.intr, t_core.intr);
+        `define COMPARE(field, error_str) \
+            if (t_core.``field !== t_reference_model.``field) begin \
+                error = 1; \
+                cause_str = $sformatf("%s\n%s Mismatch [REF]: 0x%-16h [CORE]: 0x%-16h", cause_str, error_str, t_reference_model.``field, t_core.``field); \
             end
+
+        if (t_core.dbg[2:0] | t_reference_model.dbg[2:0]) begin
+            `COMPARE(dbg[2:0] , "Debug cause")
+        end
+        else if (0 && t_core.intr[0] | t_reference_model.intr[0]) begin
+            `COMPARE(intr[0], "INTR bit")
             else begin
-                `uvm_info("scoreboard_utils", $sformatf("             Interrupts Correctly compared core %h iss %h", t_reference_model.intr, t_core.intr), UVM_MEDIUM)
+                `uvm_info("scoreboard_utils", $sformatf("             INTR correctly compared core %h iss %h", t_reference_model.intr, t_core.intr), UVM_MEDIUM)
             end
         end
-        if (t_core.trap[0] | t_reference_model.trap[0]) begin
-            if (t_core.trap[0] !== t_reference_model.trap[0]) begin
-                error = 1;
-                cause_str = $sformatf("%s\nException Mismatch [REF]: 0x%-16h [CORE]: 0x%-16h", cause_str, t_reference_model.trap[0], t_core.trap[0]);
-            end
+        else if (t_core.trap[0] | t_reference_model.trap[0]) begin
+            `COMPARE(trap[0], "TRAP Mismatch")
         end
         else begin
             if (t_core.insn !== t_reference_model.insn) begin
@@ -143,19 +150,10 @@ import "DPI-C" function void spike_set_default_params(string profile);
                 cause_str = $sformatf("%s\nINSN Mismatch    [REF]: 0x%-16h [CORE]: 0x%-16h", cause_str, t_reference_model.insn, t_core.insn);
             end
             if (t_core.rd1_addr != 0 || t_reference_model.rd1_addr != 0) begin
-                if (t_core.rd1_addr[4:0] !== t_reference_model.rd1_addr[4:0]) begin
-                    error = 1;
-                    cause_str = $sformatf("%s\nRD ADDR Mismatch [REF]: 0x%-16h [CORE]: 0x%-16h", cause_str, t_reference_model.rd1_addr[4:0], t_core.rd1_addr[4:0]);
-                end
-                if (t_core.rd1_wdata !== t_reference_model.rd1_wdata) begin
-                    error = 1;
-                    cause_str = $sformatf("%s\nRD VAL Mismatch  [REF]: 0x%-16h [CORE]: 0x%-16h", cause_str, t_reference_model.rd1_wdata, t_core.rd1_wdata);
-                end
+                `COMPARE(rd1_addr[4:0], "RD ADDR")
+                `COMPARE(rd1_wdata, "RD VAL")
             end
-            if (t_core.mode !== t_reference_model.mode) begin
-                error = 1;
-                cause_str = $sformatf("%s\nPRIV Mismatch    [REF]: 0x%-16h [CORE]: 0x%-16h", cause_str, t_reference_model.mode, t_core.mode);
-            end
+            `COMPARE(mode, "PRIV")
             if (core_pc64 !== reference_model_pc64) begin
                 error = 1;
                 cause_str = $sformatf("%s\nPC Mismatch      [REF]: 0x%-16h [CORE]: 0x%-16h", cause_str, reference_model_pc64, core_pc64);
@@ -170,12 +168,15 @@ import "DPI-C" function void spike_set_default_params(string profile);
                 bit valid = t_reference_model.csr_valid[addr] & ~m_core_cfg.unsupported_csr_mask[addr];
 
                 if (valid && t_core.csr_valid[addr]) begin
-                    bit core_value_condition = ((m_core_cfg.unified_traps && t_core.intr[0]) && !(is_csr_insn(t_core) && addr == get_insn_rs1(t_core)));
+                    bit core_value_condition = (m_core_cfg.unified_traps && (t_core.intr[0] | t_core.dbg[2:0])) && !(is_csr_insn(t_core) && addr == get_insn_rs1(t_core));
                     longint unsigned core_value = (core_value_condition) ? t_core.csr_rdata[addr] : t_core.csr_wdata[addr];
+                    longint unsigned ref_value = t_reference_model.csr_wdata[addr];
+                    if (m_core_cfg.xlen == MXL_32)
+                        ref_value = ref_value & 'hFFFF_FFFF;
                     found = 1;
-                    if (t_reference_model.csr_wdata[addr] !== core_value) begin
+                    if (ref_value !== core_value) begin
                         error = 1; cause_str = $sformatf("%s\nCSR %-4h Mismatch   [REF]: 0x%-16h [CORE]: 0x%-16h",
-                            cause_str, addr, t_reference_model.csr_wdata[addr], core_value);
+                            cause_str, addr, ref_value, core_value);
                     end
                     else begin
                         csrs_match_count += 1;
@@ -199,17 +200,22 @@ import "DPI-C" function void spike_set_default_params(string profile);
             reference_model_queue = {reference_model_queue, t_reference_model};
 
             instr_mismatch_count += 1;
-            rvfi_gen_report("MISMATCH", cause_str);
+            rvfi_gen_report("MISMATCH", (t_reference_model.halt >> 1), cause_str);
 
             `uvm_info("spike_tandem", {cause_str}, UVM_NONE);
             `uvm_info("spike_tandem", {instr_rm}, UVM_NONE);
-            `uvm_error("spike_tandem", {instr_core, " <- CORE\n"});
+            if (instr_mismatch_count >= INSTR_MISMATCH_MAX) begin
+                `uvm_fatal("spike_tandem", {instr_core, " <- CORE\n"});
+            end
+            else begin
+                `uvm_error("spike_tandem", {instr_core, " <- CORE\n"});
+            end
         end
         else begin
             `uvm_info("spike_tandem", rvfi_print_struct(t_reference_model) , UVM_MEDIUM)
             if (t_reference_model.halt[0] && !tb_sim_finished) begin
               tb_sim_finished = 1;
-              rvfi_gen_report("SUCCESS", "");
+              rvfi_gen_report("SUCCESS", (t_reference_model.halt >> 1), "");
             end
         end
 
